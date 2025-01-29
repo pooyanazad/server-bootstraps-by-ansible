@@ -1,0 +1,79 @@
+---
+- name: Bootstrap Ubuntu/Debian server
+  hosts: ubuntu_hosts
+  become: true
+
+  vars:
+    new_admin_user: deployer
+    local_pub_key_path: "~/.ssh/id_rsa.pub"
+    timezone_name: "Europe/Stockholm"
+
+  tasks:
+    - name: Update apt and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Create admin user
+      user:
+        name: "{{ new_admin_user }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        state: present
+
+    - name: Allow passwordless sudo for the new admin user
+      lineinfile:
+        dest: "/etc/sudoers.d/{{ new_admin_user }}"
+        line: "{{ new_admin_user }} ALL=(ALL) NOPASSWD: ALL"
+        create: yes
+        mode: '0440'
+
+    - name: Copy SSH key to authorized_keys
+      authorized_key:
+        user: "{{ new_admin_user }}"
+        state: present
+        key: "{{ lookup('file', local_pub_key_path) }}"
+
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone_name }}"
+
+    - name: Configure DNS (8.8.8.8 and 8.8.4.4)
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "{{ item }}"
+        create: yes
+        state: present
+      loop:
+        - "nameserver 8.8.8.8"
+        - "nameserver 8.8.4.4"
+
+    - name: Create alias file for all users
+      copy:
+        dest: /etc/profile.d/custom_aliases.sh
+        content: |
+          # Override default Ubuntu 'll' if it exists
+          unalias ll &>/dev/null
+          alias ll='ls -lrth'
+          alias ..='cd ..'
+          alias ...='cd ../..'
+        mode: '0644'
+
+    - name: Install UFW firewall
+      apt:
+        name: ufw
+        state: present
+        update_cache: yes
+
+    - name: Enable UFW (force 'yes' on interactive prompt)
+      shell: yes | ufw enable
+      register: ufw_enable
+      changed_when: "'Firewall is active' in ufw_enable.stdout"
+
+    - name: Allow SSH on port 22
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+

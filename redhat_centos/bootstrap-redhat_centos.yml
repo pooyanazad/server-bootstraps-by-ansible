@@ -1,0 +1,80 @@
+---
+- name: Bootstrap RedHat/CentOS server
+  hosts: redhat_hosts
+  become: true
+
+  vars:
+    new_admin_user: deployer
+    local_pub_key_path: "~/.ssh/id_rsa.pub"
+    timezone_name: "Europe/Stockholm"
+
+  tasks:
+    - name: Update and upgrade packages
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Create admin user
+      user:
+        name: "{{ new_admin_user }}"
+        shell: /bin/bash
+        groups: wheel
+        append: yes
+        state: present
+
+    - name: Allow passwordless sudo for the new admin user
+      lineinfile:
+        dest: "/etc/sudoers.d/{{ new_admin_user }}"
+        line: "{{ new_admin_user }} ALL=(ALL) NOPASSWD: ALL"
+        create: yes
+        mode: '0440'
+
+    - name: Copy SSH key to authorized_keys
+      authorized_key:
+        user: "{{ new_admin_user }}"
+        state: present
+        key: "{{ lookup('file', local_pub_key_path) }}"
+
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone_name }}"
+
+    - name: Configure DNS (8.8.8.8, 8.8.4.4)
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "{{ item }}"
+        create: yes
+        state: present
+      loop:
+        - "nameserver 8.8.8.8"
+        - "nameserver 8.8.4.4"
+
+    - name: Create alias file for all users
+      copy:
+        dest: /etc/profile.d/custom_aliases.sh
+        content: |
+          # override any default 'll' if it exists
+          unalias ll &>/dev/null
+          alias ll='ls -lrth'
+          alias ..='cd ..'
+          alias ...='cd ../..'
+        mode: '0644'
+
+    - name: Install firewalld
+      package:
+        name: firewalld
+        state: present
+
+    - name: Enable and start firewalld
+      service:
+        name: firewalld
+        enabled: yes
+        state: started
+
+    - name: Open port 22 for SSH
+      firewalld:
+        port: 22/tcp
+        permanent: true
+        state: enabled
+        immediate: yes
+        zone: public
